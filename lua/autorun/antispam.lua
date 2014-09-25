@@ -1,14 +1,61 @@
-local frzrep = 0.5	--props with a rating higher than that will get frozen on lag
-local delrep = 1.2	--props with a rating higher than that will get deleted on lag
+if game.SinglePlayer() then return end
 
-local lagdt = 1.8 --if a servertick takes longer than that(sec) it is concidered as lag
+UAS = UAS or {}
+UAS.settings = {
+	enabled = 1,
+	frzrep = 0.5,	--props with a rating higher than that will get frozen on lag
+	delrep = 1.2,	--props with a rating higher than that will get deleted on lag
 
-local minrep = 0.1	--minimum rating a player has to have to be able to spawn
-local blockspawn = false --block players from spawning when their rating is too low
-						--when set to false it will freeze instead
+	lagdt = 1.8, --if a servertick takes longer than that(sec) it is concidered as lag
+
+	minrep = 0.1,	--minimum rating a player has to have to be able to spawn
+	blockspawn = 0, -- 1: block players from spawning when their rating is too low
+					-- 0: freeze instead
+	coef_size = 0.00033,
+	coef_equal = 0.7,
+	coef_total = 0.4,
+	coef_base = 0.022,
+	coef_exp = 0,
+
+	mul_effect = 0.6,
+	mul_prop = 1,
+	mul_ragd = 8,
+	mul_veh = 2.5
+}
+UAS.default = {
+	enabled = 1,
+	frzrep = 0.5,
+	delrep = 1.2,
+
+	lagdt = 1.8,
+	minrep = 0.1,
+	blockspawn = 0,
+
+	coef_size = 0.00033,
+	coef_equal = 0.7,
+	coef_total = 0.4,
+	coef_base = 0.022,
+	coef_exp = 0,
+
+	mul_effect = 0.6,
+	mul_prop = 1,
+	mul_ragd = 8,
+	mul_veh = 2.5,
+}
+
+function UAS.calcrating(size,equal_ents,total_ents,ply_rating,dtime,multiplier)
+	size = (1+size) * UAS.settings.coef_size
+	dtime = 1-math.Clamp(dtime,0,1)
+	local spm = (equal_ents*UAS.settings.coef_equal)+(total_ents*UAS.settings.coef_total)
+	local mr = math.Clamp((((1+UAS.settings.coef_base+size)^(1+UAS.settings.coef_exp+spm))-1) - ((1-ply_rating) * (1-dtime)),0,1) * multiplier
+	return mr, spm
+end
+
 if SERVER then
 	
 	AddCSLuaFile()
+	AddCSLuaFile("cl_uantispam_skin.lua")
+	AddCSLuaFile("cl_uantispam_menu.lua")
 	
 	util.AddNetworkString("uantispam_info")
 	util.AddNetworkString("uantispam_pinf")
@@ -19,12 +66,9 @@ if SERVER then
 	local CurTime = CurTime
 	local player = player
 	local math = math
-	
-	local nr = 1
+
 	local spawnh = spawnh or {}
 	local entis = entis or {}
-	
-	local t = CurTime()
 	
 	local function cananyway(ply)
 		if ply.EV_GetRank and ply:EV_GetRank() == "guest" then return false end
@@ -46,11 +90,48 @@ if SERVER then
 		ply.st = CurTime()
 		ply.ls = CurTime()
 		ply.spn = 0
-		spawnh[v] = {}
+		spawnh[ply] = {}
 		ply:SetNWFloat( "spawn_rep", ply.rep )
 	end)
 	------------------------------------------------------------------
 	------------------------------------------------------------------
+	
+	local PhysObj = FindMetaTable( "PhysObj" )
+	
+	PhysObj.oldfrz = PhysObj.oldfrz or PhysObj.EnableMotion
+	
+	local function propIsNotFree(e)
+		local trace = { start = e:GetPos(), endpos = e:GetPos(), filter = e, ignoreworld = true }
+		local tr = util.TraceEntity( trace, e ) 
+		return tr.Hit
+	end
+	
+	
+	hook.Add("CanPlayerUnfreeze","dgsgahrthh",function( ply, ent, phys )
+		if not tobool(enabled) then return end
+		if propIsNotFree(ent) then return false end
+	end)
+	
+	hook.Add("EntUnfreeze","dgsgahrthh",function( ent, phys )
+		if not tobool(enabled) then return end
+		if propIsNotFree(ent) then return false end
+	end)
+	
+	function PhysObj:EnableMotion(bool)
+		local ent = self:GetEntity( )
+		
+		local canperformaction = true
+		
+		if bool then
+			canperformaction = hook.Call("EntUnfreeze",GAMEMODE,ent,self)
+		else
+			canperformaction = hook.Call("EntFreeze",GAMEMODE,ent,self)
+		end
+		
+		if canperformaction == nil or canperformaction == true then
+			self:oldfrz(bool)
+		end
+	end
 	
 	function unfreeze(ent)
 		if ent.uantispam_frzn == true then
@@ -79,53 +160,6 @@ if SERVER then
 		end
 	end
 	
-	local function propIsNotFree(e)
-		local trace = { start = e:GetPos(), endpos = e:GetPos(), filter = e, ignoreworld = true }
-		local tr = util.TraceEntity( trace, e ) 
-		return tr.Hit
-	end
-	
-	hook.Add("PhysgunDrop", "uantispam_pgpu",function(ply, e)
-		if e.uantispam_frzn == true then
-			
-			if propIsNotFree(e) then
-				local phys = e:GetPhysicsObject()
-				if phys:IsValid() then
-					phys:EnableMotion(false)
-				end
-			else
-				e.uantispam_mtn = false
-				unfreeze(e)
-			end
-		end
-	end)
-	
-	_R.PhysObj.oldfrz = _R.PhysObj.oldfrz or _R.PhysObj.EnableMotion
-	
-	hook.Add("CanPlayerUnfreeze","dgsgahrthh",function( ply, ent, phys )
-		if propIsNotFree(ent) then return false end
-	end)
-	
-	hook.Add("EntUnfreeze","dgsgahrthh",function( ent, phys )
-		if propIsNotFree(ent) then return false end
-	end)
-	
-	function _R.PhysObj:EnableMotion(bool)
-		local ent = self:GetEntity( )
-		
-		local canperformaction = true
-		
-		if bool then
-			canperformaction = hook.Call("EntUnfreeze",GAMEMODE,ent,self)
-		else
-			canperformaction = hook.Call("EntFreeze",GAMEMODE,ent,self)
-		end
-		
-		if canperformaction == nil or canperformaction == true then
-			self:oldfrz(bool)
-		end
-	end
-		
 	local function freeze(ent,phys)		
 		ent:DrawShadow(false)
 		ent.uantispam_oc = ent.uantispam_oc or ent:GetColor()
@@ -147,6 +181,31 @@ if SERVER then
 		ent.uantispam_frzn = true
 	end
 	
+	local function updaterep(ply,mr)
+		ply.rep = math.Clamp(ply.rep - mr,0,1)
+		ply:SetNWFloat( "spawn_rep", ply.rep )
+	end
+	
+	local function sendinfo(ply,type,num)
+		net.Start("uantispam_info")
+			net.WriteVector(Vector(type,num,0))
+		net.Send(ply)
+	end
+	
+	hook.Add("PhysgunDrop", "uantispam_pgpu",function(ply, e)
+		if e.uantispam_frzn == true then
+			if propIsNotFree(e) then
+				local phys = e:GetPhysicsObject()
+				if phys:IsValid() then
+					phys:EnableMotion(false)
+				end
+			else
+				e.uantispam_mtn = false
+				unfreeze(e)
+			end
+		end
+	end)
+	
 	local function spawned(v,m,mul,e)
 		if v.st == 0 then v.st = CurTime() end
 		local ls = v.ls
@@ -158,15 +217,11 @@ if SERVER then
 		else
 			spawnh[v][m] = 1
 		end
-		local c = (e:OBBMaxs() - e:OBBMins()):Length() * 0.00033
+		local c = (e:OBBMaxs() - e:OBBMins()):Length()
 		local n = spawnh[v][m]
-		local dt = 1-math.Clamp(st-ls,0,1)
-		local spm = (n*0.7)+(v.spn*0.4)
-		local mr = math.Clamp(((1.022+c)^(1+spm))-1 - ((1-v.rep) * (1-dt)),0,1) * mul
+		local mr, spm = UAS.calcrating(c,n,v.spn,v.rep,st-ls,mul)
 		
-		v.rep = math.Clamp(v.rep - mr,0,1)
-		
-		v:SetNWFloat( "spawn_rep", v.rep )
+		updaterep(v,mr)
 		
 		return mr, c, spm
 	end
@@ -180,6 +235,7 @@ if SERVER then
 		end
 	end)
 	
+	local t = RealTime()
 	hook.Add("Think","repthink",function()
 		local lt = t
 		t = RealTime()
@@ -189,7 +245,7 @@ if SERVER then
 			v:SetNWFloat( "spawn_rep", v.rep )
 			if v.ls ~= nil and v.ls + 0.6 < t then
 				if v.rep < 1 then
-					v.rep = math.Min(v.rep + (dt*(v.rep+0.05))/3,1)
+					updaterep(v,-(dt*(v.rep+0.05))/3)
 				elseif spawnh[v] ~= {} then
 					spawnh[v] = {}
 					v.spn = 0
@@ -198,19 +254,20 @@ if SERVER then
 			end
 		end
 		
-		if dt > lagdt then
+		if not tobool(enabled) then return end
+		if dt > UAS.settings.lagdt then
 			local frz = {}
 			local del = {}
 			for k, v in pairs(entis) do
 				local ent = v.ent
-				if v.spm > frzrep then
+				if v.spm > UAS.settings.frzrep then
 					if ent == nil or not IsValid(ent) then
 						entis[k] = nil
 					else
 						frz[v.spwnr] = frz[v.spwnr] or 0
 						del[v.spwnr] = del[v.spwnr] or 0
 						local phys = ent:GetPhysicsObject()
-						if phys:IsValid() and v.spm < delrep then
+						if phys:IsValid() and v.spm < UAS.settings.delrep then
 							if ent.uantispam_frzn == nil or ent.uantispam_frzn ~= true then
 								freeze(ent, phys)
 								frz[v.spwnr] = frz[v.spwnr] + 1
@@ -224,23 +281,20 @@ if SERVER then
 			end
 			for k,v in pairs(del) do
 				if IsValid(k) and k ~= nil and v > 0 then
-					net.Start("uantispam_info")
-						net.WriteVector(Vector(1,v,0))
-					net.Send(k)
+					sendinfo(k,1,v)
 				end
 			end
 			for k,v in pairs(frz) do
 				if IsValid(k) and k ~= nil and v > 0 then
-					net.Start("uantispam_info")
-						net.WriteVector(Vector(0,v,0))
-					net.Send(k)
+					sendinfo(k,0,v)
 				end
 			end
 		end
 	end)
 	
 	hook.Add("PlayerSpawnObject","spwn1",function(ply, m, n)
-		if ply.rep < minrep and not cananyway(ply) and blockspawn then
+		if not tobool(enabled) then return end
+		if ply.rep < UAS.settings.minrep and not cananyway(ply) and tobool(UAS.settings.blockspawn) then
 			return false
 		end
 	end)
@@ -258,13 +312,13 @@ if SERVER then
 			mul = mul * 0.1
 		end
 		if m == "" then
-			if ply.rep < minrep then
+			if ply.rep < UAS.settings.minrep then
 				mr, spm, c = spawned(ply,type(e),0.4*mul,e)
 			else
 				mr, spm, c = spawned(ply,type(e),mul,e)
 			end
 		else
-			if ply.rep < minrep then
+			if ply.rep < UAS.settings.minrep then
 				mr, spm, c = spawned(ply,m,0.4*mul,e)
 			else
 				mr, spm, c = spawned(ply,m,mul,e)
@@ -274,19 +328,21 @@ if SERVER then
 		e:SetCollisionGroup(COLLISION_GROUP_NONE)
 		
 		local spm = ((mr*0.5)+(spm*0.3)+(c*0.2))*0.6
-
-		if propIsNotFree(e) or (not blockspawn and ply.rep < minrep and not cananyway(ply)) then
-			if phys:IsValid() and phys:IsMoveable() then
-				freeze(e,phys)
+		
+		if tobool(enabled) then
+			if propIsNotFree(e) or (not tobool(UAS.settings.blockspawn) and ply.rep < UAS.settings.minrep and not cananyway(ply)) then
+				if phys:IsValid() and phys:IsMoveable() then
+					freeze(e,phys)
+				end
 			end
 		end
 		
-		if spm > delrep then
+		if spm > UAS.settings.delrep then
 			net.Start("uantispam_pinf")
 				net.WriteBit(true)
 				net.WriteEntity( e )
 			net.Send(ply)
-		elseif spm > frzrep then
+		elseif spm > UAS.settings.frzrep then
 			net.Start("uantispam_pinf")
 				net.WriteBit(false)
 				net.WriteEntity( e )
@@ -301,20 +357,23 @@ if SERVER then
 	end)
 	
 	hook.Add("PlayerSpawnedEffect","spwnd",function(ply,mdl,ent)
-		spawnHub(ply,ent,mdl,0.6)
+		spawnHub(ply,ent,mdl,UAS.settings.mul_effect)
 	end)
 	hook.Add("PlayerSpawnedProp","spwnd",function(ply,mdl,ent)
-		spawnHub(ply,ent,mdl,1)
+		spawnHub(ply,ent,mdl,UAS.settings.mul_prop)
 	end)
 	hook.Add("PlayerSpawnedRagdoll","spwnd",function(ply,mdl,ent)
-		spawnHub(ply,ent,mdl,8)
+		spawnHub(ply,ent,mdl,UAS.settings.mul_ragd)
 	end)
 	hook.Add("PlayerSpawnedVehicle","spwnd",function(ply,ent)
-		spawnHub(ply,ent,"",2.5)
+		spawnHub(ply,ent,"",UAS.settings.mul_veh)
 	end)
 end
 
 if CLIENT then
+	
+	include("cl_uantispam_menu.lua")
+	include("cl_uantispam_skin.lua")
 	local chat = chat
 	local math = math
 	local surface = surface
@@ -324,15 +383,15 @@ if CLIENT then
 	local msgs = {}
 	local prps = {}
 	local pi = math.pi
-	local LP = LocalPlayer()
+	local LP = LocalPlayer
 	
 	print("[+] Uke's antispam loaded clientside.")
-	
+
 	hook.Add("HUDPaint","sdaf",function()
-		local rep = LocalPlayer():GetNWFloat( "spawn_rep" ) or 1
+		local rep = LP():GetNWFloat( "spawn_rep" ) or 1
 		
 		local txt = "Spawn Capability: "..tostring(math.floor(rep*100)).."%"
-		if rep < minrep then
+		if rep < UAS.settings.minrep then
 			local flsh = (math.sin(SysTime()*30)+1)/2
 			surface.SetTextColor(Color(205*flsh + 50,50,50,255))
 		elseif rep < 1 then
@@ -349,7 +408,7 @@ if CLIENT then
 		surface.SetTextPos(tpx, tpy)
 		surface.DrawText(txt)
 		
-		local tr = LP:GetEyeTrace().Entity
+		local tr = LP():GetEyeTrace().Entity
 		
 		if IsValid(tr) and tr ~= nil and not tr:IsWorld() then
 			if uantispam_b ~= nil then
