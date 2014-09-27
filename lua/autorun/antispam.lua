@@ -1,54 +1,69 @@
 if game.SinglePlayer() then return end
 
 UAS = UAS or {}
-UAS.settings = {
+
+UAS.default = {
 	enabled = 1,
-	frzrep = 0.5,	--props with a rating higher than that will get frozen on lag
-	delrep = 1.2,	--props with a rating higher than that will get deleted on lag
+	frzen = 1,
+	frzrep = 0.5,
+	delrep = 1.2,
 
-	lagdt = 1.8, --if a servertick takes longer than that(sec) it is concidered as lag
+	lagdt = 1.2,
 
-	minrep = 0.1,	--minimum rating a player has to have to be able to spawn
-	blockspawn = 0, -- 1: block players from spawning when their rating is too low
-					-- 0: freeze instead
-	coef_size = 0.00033,
-	coef_equal = 0.7,
-	coef_total = 0.4,
-	coef_base = 0.022,
-	coef_exp = 0,
+	minrep = 0.15,
+	blockspawn = 0,
+
+	coef_size = 0.008,
+	coef_equal = 0.2,
+	coef_total = 0.1,
+	coef_base = 1.2,
+	--coef_exp = 4,
+	coef_lift = 0.02,
+	coef_push = 0,
+	coef_stretch = 32,
+	coef_ratinginf = 0.3,
+	coef_ratingexp = 0.9,
 
 	mul_effect = 0.6,
 	mul_prop = 1,
 	mul_ragd = 8,
 	mul_veh = 2.5
 }
-UAS.default = {
-	enabled = 1,
-	frzrep = 0.5,
-	delrep = 1.2,
+UAS.settings = table.Copy(UAS.default)
 
-	lagdt = 1.8,
-	minrep = 0.1,
-	blockspawn = 0,
+UAS.names = {
+	enabled = "Antispam Enabled",
+	frzen = "Ghosting Enabled",
+	frzrep = "Freeze Ratng",
+	delrep = "Delete Rating",
 
-	coef_size = 0.00033,
-	coef_equal = 0.7,
-	coef_total = 0.4,
-	coef_base = 0.022,
-	coef_exp = 0,
+	lagdt = "Lagdelay (sec)",
+	minrep = "Min. Spawn Capability",
+	blockspawn = "Block Spawn",
 
-	mul_effect = 0.6,
-	mul_prop = 1,
-	mul_ragd = 8,
-	mul_veh = 2.5,
+	coef_size = "Size Coefficient",
+	coef_equal = "Same-Entity Coefficient",
+	coef_total = "Total-Entity Coefficient",
+	coef_base = "Exponent Base",
+	--coef_exp = "Exponent",
+	coef_lift = "Lift",
+	coef_push = "Push",
+	coef_stretch = "Stretch",
+	coef_ratinginf = "Spawn Capability Influence",
+	coef_ratingexp = "Spawn Capability Exponent",
+
+	mul_effect = "Effect Multiplier",
+	mul_prop = "Prop Multiplier",
+	mul_ragd = "Ragdoll Multiplier",
+	mul_veh = "Vehicle Multiplier",
 }
 
 function UAS.calcrating(size,equal_ents,total_ents,ply_rating,dtime,multiplier)
 	size = (1+size) * UAS.settings.coef_size
 	dtime = 1-math.Clamp(dtime,0,1)
 	local spm = (equal_ents*UAS.settings.coef_equal)+(total_ents*UAS.settings.coef_total)
-	local mr = math.Clamp((((1+UAS.settings.coef_base+size)^(1+UAS.settings.coef_exp+spm))-1) - ((1-ply_rating) * (1-dtime)),0,1) * multiplier
-	return mr, spm
+	local mr = UAS.settings.coef_lift + math.Max(((((UAS.settings.coef_base+size)^(1+spm))) - ((1-UAS.settings.coef_ratinginf)+((ply_rating)^UAS.settings.coef_ratingexp * ((1-dtime) + UAS.settings.coef_ratinginf)))) * multiplier - UAS.settings.coef_push,0) / UAS.settings.coef_stretch
+	return mr, spm, size
 end
 
 if SERVER then
@@ -59,6 +74,7 @@ if SERVER then
 	
 	util.AddNetworkString("uantispam_info")
 	util.AddNetworkString("uantispam_pinf")
+	util.AddNetworkString("uantispam_valueexchange")
 	
 	print("[+] Uke's antispam loaded serverside.")
 	
@@ -66,32 +82,94 @@ if SERVER then
 	local CurTime = CurTime
 	local player = player
 	local math = math
-
+	
+	UAS.filename = "ukes_antispam_config_2014.txt"
+	UAS.delaysave = false
+	UAS.savetime = 0
+	
+	function UAS.saveConfig()
+		local configFile = util.TableToKeyValues(UAS.settings)
+		file.Write(UAS.filename, configFile)
+		print("[UAS]Configfile saved.")
+	end
+	
+	function UAS.loadConfig()
+		if file.Exists(UAS.filename,"DATA") then
+			local configFile = file.Read(UAS.filename,"DATA")
+			if (configFile and #configFile > 0) then
+				UAS.settings = util.KeyValuesToTable(configFile)
+				print("[UAS]Configfile loaded.")
+			else
+				UAS.settings = table.Copy(UAS.default)
+				print("[UAS]Default config loaded.")
+			end
+		end
+	end
+	
+	net.Receive("uantispam_valueexchange", function( _, ply)
+		if not ply:IsSuperAdmin() then return end
+		local opt = net.ReadString()
+		local val = net.ReadFloat()
+		if not UAS.settings[opt] or not val then return end
+		UAS.settings[opt] = val
+		local name = UAS.names[opt] or opt
+		print("[UAS]"..ply:Name()..": "..name.." = "..tostring(val))
+		net.Start("uantispam_valueexchange")
+			net.WriteString(opt)
+			net.WriteFloat(val)
+		net.Broadcast()
+		UAS.delaysave = true
+		UAS.savetime = SysTime() + 4
+	end)
+	
+	UAS.loadConfig()
+	
+	hook.Add("Think","uas_sync",function()
+		if not UAS.delaysave then return end
+		if UAS.savetime > SysTime() then return end
+		UAS.delaysave = false
+		UAS.savetime = 0
+		UAS.saveConfig()
+	end)
+	
 	local spawnh = spawnh or {}
 	local entis = entis or {}
 	
 	local function cananyway(ply)
 		if ply.EV_GetRank and ply:EV_GetRank() == "guest" then return false end
-		return true	
+		return false --#	
 	end
 	------------------------------------------------------------------
 	------------------------------------------------------------------
 	for k,v in pairs(player.GetAll()) do
 		v.rep = 1
-		v.st = CurTime()
-		v.ls = CurTime()
+		v.st = 0
+		v.ls = 0
 		v.spn = 0
 		spawnh[v] = spawnh[v] or {}
 		v:SetNWFloat( "spawn_rep", v.rep )
+		
+		for l,j in pairs(UAS.settings) do
+			net.Start("uantispam_valueexchange")
+				net.WriteString(l)
+				net.WriteFloat(j)
+			net.Send(v)
+		end
 	end
 	
 	hook.Add("PlayerInitialSpawn","spwn1",function(ply)
 		ply.rep = 1
-		ply.st = CurTime()
-		ply.ls = CurTime()
+		ply.st = 0
+		ply.ls = 0
 		ply.spn = 0
 		spawnh[ply] = {}
 		ply:SetNWFloat( "spawn_rep", ply.rep )
+		for l,j in pairs(UAS.settings) do
+			net.Start("uantispam_valueexchange")
+				net.WriteString(l)
+				net.WriteFloat(j)
+			net.Send(ply)
+		end
 	end)
 	------------------------------------------------------------------
 	------------------------------------------------------------------
@@ -108,12 +186,12 @@ if SERVER then
 	
 	
 	hook.Add("CanPlayerUnfreeze","dgsgahrthh",function( ply, ent, phys )
-		if not tobool(enabled) then return end
+		if UAS.settings.frzen == 0 then return end
 		if propIsNotFree(ent) then return false end
 	end)
 	
 	hook.Add("EntUnfreeze","dgsgahrthh",function( ent, phys )
-		if not tobool(enabled) then return end
+		if UAS.settings.frzen == 0 then return end
 		if propIsNotFree(ent) then return false end
 	end)
 	
@@ -182,8 +260,10 @@ if SERVER then
 	end
 	
 	local function updaterep(ply,mr)
-		ply.rep = math.Clamp(ply.rep - mr,0,1)
-		ply:SetNWFloat( "spawn_rep", ply.rep )
+		local nr = math.Clamp(ply.rep - mr,0,1)
+		if nr == ply.rep then return end
+		ply.rep = nr
+		ply:SetNWFloat( "spawn_rep", nr )
 	end
 	
 	local function sendinfo(ply,type,num)
@@ -219,11 +299,11 @@ if SERVER then
 		end
 		local c = (e:OBBMaxs() - e:OBBMins()):Length()
 		local n = spawnh[v][m]
-		local mr, spm = UAS.calcrating(c,n,v.spn,v.rep,st-ls,mul)
+		local mr, spm, c = UAS.calcrating(c,n,v.spn,v.rep,st-ls,mul)
 		
 		updaterep(v,mr)
 		
-		return mr, c, spm
+		return mr, spm, c
 	end
 	
 	hook.Add("EntityRemoved","regain",function(e)
@@ -231,7 +311,7 @@ if SERVER then
 		if v ~= nil and v ~= {} and v.spwnr ~= nil and IsValid(v.spwnr) then
 			local ply = v.spwnr
 			local mr = v.mr
-			ply.rep = math.Clamp(ply.rep + mr*0.6,0,1)
+			updaterep(ply,-mr*0.6)
 		end
 	end)
 	
@@ -242,11 +322,11 @@ if SERVER then
 		local dt = t-lt
 		
 		for k,v in pairs(player.GetAll()) do
-			v:SetNWFloat( "spawn_rep", v.rep )
 			if v.ls ~= nil and v.ls + 0.6 < t then
 				if v.rep < 1 then
 					updaterep(v,-(dt*(v.rep+0.05))/3)
 				elseif spawnh[v] ~= {} then
+					updaterep(v,0)
 					spawnh[v] = {}
 					v.spn = 0
 					v.st = 0
@@ -254,7 +334,7 @@ if SERVER then
 			end
 		end
 		
-		if not tobool(enabled) then return end
+		if UAS.settings.enabled == 0 then return end
 		if dt > UAS.settings.lagdt then
 			local frz = {}
 			local del = {}
@@ -293,8 +373,8 @@ if SERVER then
 	end)
 	
 	hook.Add("PlayerSpawnObject","spwn1",function(ply, m, n)
-		if not tobool(enabled) then return end
-		if ply.rep < UAS.settings.minrep and not cananyway(ply) and tobool(UAS.settings.blockspawn) then
+		if UAS.settings.enabled == 0 then return end
+		if ply.rep < UAS.settings.minrep and not cananyway(ply) and UAS.settings.blockspawn == 1 then
 			return false
 		end
 	end)
@@ -306,7 +386,6 @@ if SERVER then
 	
 	local function spawnHub2(ply,e,m,mul)
 		local mr, spm, c = 0, 0, 0
-		
 		local phys = e:GetPhysicsObject()
 		if phys:IsValid() and not phys:IsMoveable() then
 			mul = mul * 0.1
@@ -324,23 +403,17 @@ if SERVER then
 				mr, spm, c = spawned(ply,m,mul,e)
 			end
 		end
-		
 		e:SetCollisionGroup(COLLISION_GROUP_NONE)
-		
 		local spm = ((mr*0.5)+(spm*0.3)+(c*0.2))*0.6
-		
-		if tobool(enabled) then
-			if propIsNotFree(e) or (not tobool(UAS.settings.blockspawn) and ply.rep < UAS.settings.minrep and not cananyway(ply)) then
-				if phys:IsValid() and phys:IsMoveable() then
-					freeze(e,phys)
-				end
+		if (propIsNotFree(e) and UAS.settings.frzen == 1) or (UAS.settings.blockspawn == 0 and ply.rep < UAS.settings.minrep and not cananyway(ply) and UAS.settings.enabled == 1 ) then
+			if phys:IsValid() and phys:IsMoveable() then
+				freeze(e,phys)
 			end
 		end
-		
 		if spm > UAS.settings.delrep then
 			net.Start("uantispam_pinf")
 				net.WriteBit(true)
-				net.WriteEntity( e )
+				net.WriteEntity( e)
 			net.Send(ply)
 		elseif spm > UAS.settings.frzrep then
 			net.Start("uantispam_pinf")
@@ -348,7 +421,6 @@ if SERVER then
 				net.WriteEntity( e )
 			net.Send(ply)
 		end
-		
 		entis[e] = {["ent"] = e, ["mr"] = mr,["spm"] = spm, ["spwnr"] = ply}
 	end
 	
@@ -372,8 +444,6 @@ end
 
 if CLIENT then
 	
-	include("cl_uantispam_menu.lua")
-	include("cl_uantispam_skin.lua")
 	local chat = chat
 	local math = math
 	local surface = surface
@@ -382,12 +452,44 @@ if CLIENT then
 	local FrameTime =  FrameTime
 	local msgs = {}
 	local prps = {}
+	local stts = {}
 	local pi = math.pi
 	local LP = LocalPlayer
 	
+	local te
+	
+	hook.Add("Think", "tet", function()
+		if LP().GetEyeTrace then
+			local tr = LP():GetEyeTrace()
+			if tr then
+				te = tr.Entity
+			else
+				te = nil
+			end
+		else
+			te = nil
+		end
+	end)
+	
 	print("[+] Uke's antispam loaded clientside.")
 
+	function UAS.SendToServer(opt,val)
+		if not LP():IsSuperAdmin() then return end
+		net.Start("uantispam_valueexchange")
+			net.WriteString(opt)
+			net.WriteFloat(val)
+		net.SendToServer()
+	end
+	
+	net.Receive("uantispam_valueexchange", function()
+		local opt = net.ReadString()
+		local val = net.ReadFloat()
+		if not UAS.settings[opt] or not val then return end
+		UAS.settings[opt] = val
+	end)
+	
 	hook.Add("HUDPaint","sdaf",function()
+		if UAS.settings.enabled == 0 then return end
 		local rep = LP():GetNWFloat( "spawn_rep" ) or 1
 		
 		local txt = "Spawn Capability: "..tostring(math.floor(rep*100)).."%"
@@ -407,13 +509,11 @@ if CLIENT then
 		local tpx, tpy = ScrW() -tsx- 10, ScrH() - tsy - 10
 		surface.SetTextPos(tpx, tpy)
 		surface.DrawText(txt)
-		
-		local tr = LP():GetEyeTrace().Entity
-		
-		if IsValid(tr) and tr ~= nil and not tr:IsWorld() then
-			if uantispam_b ~= nil then
+
+		if IsValid(te) and te ~= nil and not te:IsWorld() then
+			if te.uans_b ~= nil then
 				surface.SetDrawColor(255,255,255,255)
-				if tr.uantispam_b == 1 then
+				if te.uans_b == 1 then
 					surface.SetMaterial(Material("icon16/bullet_orange.png"))
 				else
 					surface.SetMaterial(Material("icon16/bullet_blue.png"))
@@ -489,9 +589,13 @@ if CLIENT then
 	
 	net.Receive("uantispam_pinf", function()
 		local b = net.ReadBit()
-		local e = net.ReadEntity()
-		e.uantispam_b = 1
+		local ent = net.ReadEntity()
+		ent.uans_b = b
+		if UAS.settings.enabled == 0 then return end
 		table.insert(prps, {["del"] = (b == 1 and true or false), ["vel"] = -0.6} )		
 	end)
+	
+	include("cl_uantispam_menu.lua")
+	include("cl_uantispam_skin.lua")
 	
 end

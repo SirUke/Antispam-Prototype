@@ -5,29 +5,10 @@ local Color = Color
 local math = math
 local gui = gui
 local ScrW, ScrH = ScrW, ScrH
+local LP = LocalPlayer
 
 SKIN = SKIN or {}
 SKIN.GwenTexture = Material( "gwenskin/defaultskin.png" )
-
-UAS.gset = {
-		x = 1,
-		y = 1,
-		indie = 0,
-		drawborder = 1,
-		drawindicators = 1,
-		fid = 30
-	}
-UAS.gdef = {
-		x = 1,
-		y = 1,
-		indie = 0,
-		drawborder = 1,
-		drawindicators = 1,
-		fid = 30
-	}
-UAS.graphs = {
-	
-}
 
 surface.CreateFont( "UASGraphTiny", {
 	font = "Lucida Console",
@@ -189,11 +170,14 @@ UAS.skin = {
 		return pnl
 	end,
 
-	addsldr = function(parent,name, opt, tab, def, min, max, dcmls, desc)
+	addsldr = function(parent,name, opt, tab, def, min, max, dcmls, issetting, desc)
 		if not validopt(tab,opt) then return end
+		local restrict = (issetting and not LP():IsSuperAdmin()) and true or false
 		local wide = parent:GetWide()
 		local pnl = subpanel(parent,wide-4, 40, function() UAS.skin.PModifier( 0,0, wide-4, 40 ) end)
 		pnl.desc = desc
+		
+		if name == "" or name == nil then name = UAS.names[opt] or "" end
 		
 		local sldr = vgui.Create( "DNumSlider", pnl )
 		sldr:SetPos( 10, -1 )
@@ -203,6 +187,7 @@ UAS.skin = {
 		sldr:SetDecimals( dcmls )
 		sldr:SetValue( UAS[tab][opt] )
 		sldr.Think = function() if UAS[tab][opt] ~= sldr:GetValue() then sldr:SetValue( UAS.settings[opt] ) end end
+		sldr.mightyE = false
 		
 		sldr.Label:Dock( TOP )
 		sldr.Label:SetMouseInputEnabled( false )
@@ -219,21 +204,50 @@ UAS.skin = {
 		sldr.Slider.TranslateValues = function( slider, x, y ) return sldr:TranslateSliderValues( x, y ) end
 		sldr.Slider.Knob:NoClipping( false )
 		
-		defbut(sldr,pnl,opt,tab,def,wide-95,7)
+		if not restrict then 
+			local defbut = defbut(sldr,pnl,opt,tab,def,wide-95,7)
+			if not defbut then return end
+			function defbut:DoClick() UAS[tab][opt] = UAS[def][opt]; sldr:SetValue( UAS[tab][opt] ); sldr.mightyE = true end
+		end
 		
+		function sldr:Think()
+			if sldr:IsEditing() then
+				sldr.mightyE = true
+			elseif sldr.mightyE then
+				sldr.mightyE = false
+				if restrict then return end
+				local dc = math.Max(10^sldr:GetDecimals(),1)
+				local val = math.floor(math.Round(sldr:GetValue()*dc))/dc
+				UAS.SendToServer(opt,val)
+			else
+				if sldr:GetValue() ~= UAS[tab][opt] then sldr:SetValue( UAS[tab][opt] ) end
+			end
+		end
+		
+		function pnl:IsEditing() return sldr:IsEditing() end
 		function pnl:Edited(val) end
 		function pnl:SetValue(val) sldr:SetValue( val ) end
 		function pnl:GetValue() return sldr:GetValue() end
-		sldr.OnValueChanged = function() UAS[tab][opt] = sldr:GetValue(); pnl:Edited(UAS[tab][opt]) end
+		sldr.OnValueChanged = function()
+			if restrict then return end
+			local dc = math.Max(10^sldr:GetDecimals(),1)
+			local val = math.floor(math.Round(sldr:GetValue()*dc))/dc
+			
+			UAS[tab][opt] = val
+			pnl:Edited(val)
+		end
 		
 		return pnl
 	end,
 	
-	addchck = function(parent,name, opt, tab, def, desc)
+	addchck = function(parent,name, opt, tab, def, issetting, desc)
 		if not validopt(tab,opt) then return end
+		local restrict = (issetting and not LP():IsSuperAdmin()) and true or false
 		local wide = parent:GetWide()
 		local pnl = subpanel(parent,wide-4, 19, function() UAS.skin.PModifier( 0,0, wide-4, 19 ) end)
 		pnl.desc = desc
+		
+		if name == "" or name == nil then name = UAS.names[opt] or "" end
 		
 		local chck = vgui.Create( "DCheckBoxLabel", pnl )
 		chck:SetPos(2,2)
@@ -245,12 +259,18 @@ UAS.skin = {
 		
 		chck:SetTextColor(Color(0,0,0,255))
 
-		defbut(chck,pnl,opt,tab,def,wide-44,2)
+		if not restrict then defbut(chck,pnl,opt,tab,def,wide-44,2) end
 		
 		function pnl:Edited(val) end
-		function pnl:SetValue(val) sldr:SetValue( val ) end
+		function pnl:SetValue(val) chck:SetValue( val ) end
 		function pnl:GetValue() return booltonumber(chck:GetChecked()) end
-		chck.OnChange = function() local val = booltonumber(chck:GetChecked()); UAS[tab][opt] = val; pnl:Edited(val) end
+		chck.OnChange = function()
+			local val = booltonumber(chck:GetChecked())
+			if restrict then return
+			else UAS.SendToServer(opt,val) end
+			UAS[tab][opt] = val
+			pnl:Edited(val)
+		end
 		
 		return pnl
 	end,
@@ -281,15 +301,26 @@ UAS.skin = {
 		
 		pnl.lxz = 1
 		pnl.lyz = 1
-		function pnl:SetXzoom(n) self.xzoom = n end
-		function pnl:GetXzoom() return self.xzoom end
-		function pnl:SetYzoom(n) self.yzoom = n end
-		function pnl:GetYzoom() return self.yzoom end
-		
+		function pnl:SetZoomX(n) self.xzoom = n end
+		function pnl:SetZoomY(n) self.yzoom = n end
+		function pnl:SetZoomXY(n,m) self.xzoom = n; self.yzoom = m end
+		function pnl:GetZoomX() return self.xzoom end
+		function pnl:GetZoomY() return self.yzoom end
+		function pnl:GetZoomXY() return self.xzoom, self.yzoom end
+
 		function pnl:SetMaxX(n) self.mx = n end
-		function pnl:GetMaxX() return self.mx end
 		function pnl:SetMaxY(n) self.my = n end
+		function pnl:SetMaxXY(n,m) self.mx = n; self.my = m end
+		function pnl:GetMaxX() return self.mx end
 		function pnl:GetMaxY() return self.my end
+		function pnl:GetMaxXY() return self.mx, self.my end
+		
+		function pnl:SetGridX(n) self.xsca = n end
+		function pnl:SetGridY(n) self.ysca = n end
+		function pnl:SetGridXY(n,m) self.xsca = n; self.ysca = m end
+		function pnl:GetGridX() return self.xsca end
+		function pnl:GetGridY() return self.ysca end
+		function pnl:GetGridXY() return self.xsca, self.ysca end
 		
 		function pnl:SetNameX(n) self.xname = n or "x" end
 		function pnl:SetNameY(n) self.yname = n or "y" end
@@ -330,6 +361,7 @@ UAS.skin = {
 			if not starttop then _,y1 = self:TranslateCoordinates(0,y1) else y1 = 0 end
 			local x,y2,w,h = self:TranslateCoordinates(0,y2)
 			
+			if starttop and y1== y2 then return end
 			if (y1 < 0 or not starttop) and y2 < 0 then return end
 			if y1 > y2 and not starttop then y = y1; y1 = y2; y2 = y end
 			
@@ -343,6 +375,7 @@ UAS.skin = {
 			if not startright then x1,_ = self:TranslateCoordinates(x1,0) end
 			local x2,y,w,h = self:TranslateCoordinates(x2,0)
 			
+			if startright and x1== x2 then return end
 			if (x1 > w or not startright) and x2 > w then return end
 			if x1 > x2 and not startright then x = x1; x1 = x2; x2 = x end
 			
@@ -359,6 +392,11 @@ UAS.skin = {
 			surface.DrawLine(x,0,x,y+off)
 			
 			return x, y+off
+		end
+		
+		function pnl:OnMouseWheeled(d)
+			--pnl.xzoom = math.Clamp(pnl.xzoom + d*0.04*pnl.xzoom,0.05,10)
+			--pnl.yzoom = math.Clamp(pnl.yzoom + d*0.04*pnl.yzoom,0.05,10)
 		end
 		
 		function pnl:PreGridPaint(w,h) end
@@ -402,12 +440,12 @@ UAS.skin = {
 		
 		function pnl:GridPaint(w,h)
 			local w2,h2 = w - self.xin,h - self.yin
-			--print(w2)
-			local xs = math.ceil((self.xsca/self.xzoom) / self.grid) 
+			local xs = math.ceil((self.xsca/self.xzoom) / self.grid)
 			local mx = self.mx/self.xsca*pnl.grid
-			for i = 1, xs do
+			local stx = math.Max(math.Round(1/ pnl.xzoom),1)
+			for i = 1, xs, stx do
 				local n = tostring(math.floor(i * mx * 100) / 100)
-				self:DrawVerticalLine((i-0.5)*mx,0,30)
+				self:DrawVerticalLine((i-stx*0.5)*mx,0,30)
 				local x, y = self:DrawVerticalLine(i*mx,5,200)
 				local sx,sy = surface.GetTextSize(n)
 				surface.SetTextPos(x-sx/2,y+2)
@@ -416,9 +454,10 @@ UAS.skin = {
 			
 			local ys = math.ceil((self.ysca/self.yzoom) / self.grid)
 			local my = self.my/self.ysca*pnl.grid
-			for i = 1, ys do
+			local sty = math.Max(math.Round(1/ pnl.yzoom),1)
+			for i = 1, ys, sty do
 				local n = tostring(math.floor(i * my * 100) / 100)
-				self:DrawHorizontalLine((i-0.5)*my,0,30)
+				self:DrawHorizontalLine((i-sty*0.5)*my,0,30)
 				local x,y = self:DrawHorizontalLine(i*my,5,200)
 				local sx,sy = surface.GetTextSize(n)
 				surface.SetTextPos(x-sx-2,y-sy/4)
@@ -426,7 +465,7 @@ UAS.skin = {
 			end
 		end
 		
-		pnl.But = vgui.Create("DImageButton",pnl)
+		/*pnl.But = vgui.Create("DImageButton",pnl)
 		pnl.But:SetImage("icon16/wand.png")
 		pnl.But:SetSize(16,16)
 		pnl.But:SetPos(2,sy-18)
@@ -441,17 +480,15 @@ UAS.skin = {
 			end
 		end
 		pnl.But.DoClick = function()
-			local scx, scy = (sx-pnl.xin)* pnl.xzoom*pnl.xsca, (sy-pnl.yin)*pnl.yzoom*pnl.ysca
+			local scx, scy = (sx-pnl.xin)* pnl.mx/pnl.xzoom, (sy-pnl.yin)* pnl.my/pnl.yzoom
 			
 			if scx > scy then
 				pnl.lastset = 1
-				pnl.lyz = pnl.yzoom
 				pnl.oxz = pnl.xzoom
 				pnl.oyz = pnl.yzoom
 				pnl.xzoom = pnl.xzoom * (scy / scx)
 			elseif scx < scy then
 				pnl.lastset = 1
-				pnl.lxz = pnl.xzoom 
 				pnl.oxz = pnl.xzoom
 				pnl.oyz = pnl.yzoom
 				pnl.yzoom = pnl.yzoom * (scx / scy)
@@ -462,7 +499,7 @@ UAS.skin = {
 			end
 		end
 		--pnl.But:DoClick()
-		
+		*/
 		return pnl
 	end
 }
