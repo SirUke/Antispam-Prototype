@@ -17,17 +17,24 @@ UAS.default = {
 	coef_equal = 0.2,
 	coef_total = 0.1,
 	coef_base = 1.2,
-	--coef_exp = 4,
-	coef_lift = 0.02,
+	coef_exp = 0.8,
+	coef_lift = 0.04,
 	coef_push = 0,
-	coef_stretch = 32,
+	coef_stretch = 150,
+	
 	coef_ratinginf = 0.3,
 	coef_ratingexp = 0.9,
 
 	mul_effect = 0.6,
 	mul_prop = 1,
 	mul_ragd = 8,
-	mul_veh = 2.5
+	mul_sent = 2,
+	mul_veh = 2.5,
+	
+	recharge_delay = 0.6,
+	recharge_amount = 0.03,
+	recharge_length = 3.5,
+	recharge_grade = 0.3
 }
 UAS.settings = table.Copy(UAS.default)
 
@@ -45,7 +52,7 @@ UAS.names = {
 	coef_equal = "Same-Entity Coefficient",
 	coef_total = "Total-Entity Coefficient",
 	coef_base = "Exponent Base",
-	--coef_exp = "Exponent",
+	coef_exp = "Exponent",
 	coef_lift = "Lift",
 	coef_push = "Push",
 	coef_stretch = "Stretch",
@@ -55,14 +62,28 @@ UAS.names = {
 	mul_effect = "Effect Multiplier",
 	mul_prop = "Prop Multiplier",
 	mul_ragd = "Ragdoll Multiplier",
+	mul_sent = "SENT Multiplier",
 	mul_veh = "Vehicle Multiplier",
+	
+	recharge_delay = "Recharge Delay",
+	recharge_amount = "Recharge Amount",
+	recharge_length = "Recharge Length",
+	recharge_grade = "Recharge Grade"
 }
 
 function UAS.calcrating(size,equal_ents,total_ents,ply_rating,dtime,multiplier)
 	size = (1+size) * UAS.settings.coef_size
 	dtime = 1-math.Clamp(dtime,0,1)
 	local spm = (equal_ents*UAS.settings.coef_equal)+(total_ents*UAS.settings.coef_total)
-	local mr = UAS.settings.coef_lift + math.Max(((((UAS.settings.coef_base+size)^(1+spm))) - ((1-UAS.settings.coef_ratinginf)+((ply_rating)^UAS.settings.coef_ratingexp * ((1-dtime) + UAS.settings.coef_ratinginf)))) * multiplier - UAS.settings.coef_push,0) / UAS.settings.coef_stretch
+	local mr = UAS.settings.coef_lift + math.Max(((((UAS.settings.coef_base+(size-UAS.settings.coef_push))^(1+spm+UAS.settings.coef_exp))) - ((1-UAS.settings.coef_ratinginf)+((ply_rating)^UAS.settings.coef_ratingexp * ((1-dtime) + UAS.settings.coef_ratinginf)))) * multiplier,0) / UAS.settings.coef_stretch
+	return mr, spm, size
+end
+
+function UAS.calcrating_def(size,equal_ents,total_ents,ply_rating,dtime,multiplier)
+	size = (1+size) * UAS.default.coef_size
+	dtime = 1-math.Clamp(dtime,0,1)
+	local spm = (equal_ents*UAS.default.coef_equal)+(total_ents*UAS.default.coef_total)
+	local mr = UAS.default.coef_lift + math.Max(((((UAS.default.coef_base+(size-UAS.default.coef_push))^(1+spm+UAS.default.coef_exp))) - ((1-UAS.default.coef_ratinginf)+((ply_rating)^UAS.default.coef_ratingexp * ((1-dtime) + UAS.default.coef_ratinginf)))) * multiplier,0) / UAS.default.coef_stretch
 	return mr, spm, size
 end
 
@@ -97,7 +118,8 @@ if SERVER then
 		if file.Exists(UAS.filename,"DATA") then
 			local configFile = file.Read(UAS.filename,"DATA")
 			if (configFile and #configFile > 0) then
-				UAS.settings = util.KeyValuesToTable(configFile)
+				local tab = util.KeyValuesToTable(configFile)
+				table.Merge( UAS.settings, tab )
 				print("[UAS]Configfile loaded.")
 			else
 				UAS.settings = table.Copy(UAS.default)
@@ -148,13 +170,14 @@ if SERVER then
 		v.spn = 0
 		spawnh[v] = spawnh[v] or {}
 		v:SetNWFloat( "spawn_rep", v.rep )
-		
+		timer.Simple(0.2+v:Ping()/1000,function()
 		for l,j in pairs(UAS.settings) do
 			net.Start("uantispam_valueexchange")
 				net.WriteString(l)
 				net.WriteFloat(j)
 			net.Send(v)
-		end
+			end
+		end)
 	end
 	
 	hook.Add("PlayerInitialSpawn","spwn1",function(ply)
@@ -164,38 +187,44 @@ if SERVER then
 		ply.spn = 0
 		spawnh[ply] = {}
 		ply:SetNWFloat( "spawn_rep", ply.rep )
+		timer.Simple(0.2+ply:Ping()/1000,function()
 		for l,j in pairs(UAS.settings) do
 			net.Start("uantispam_valueexchange")
 				net.WriteString(l)
 				net.WriteFloat(j)
 			net.Send(ply)
 		end
+		end)
 	end)
 	------------------------------------------------------------------
 	------------------------------------------------------------------
-	
+
 	local PhysObj = FindMetaTable( "PhysObj" )
 	
 	PhysObj.oldfrz = PhysObj.oldfrz or PhysObj.EnableMotion
-	
+
 	local function propIsNotFree(e)
 		local trace = { start = e:GetPos(), endpos = e:GetPos(), filter = e, ignoreworld = true }
 		local tr = util.TraceEntity( trace, e ) 
 		return tr.Hit
 	end
 	
-	
 	hook.Add("CanPlayerUnfreeze","dgsgahrthh",function( ply, ent, phys )
-		if UAS.settings.frzen == 0 then return end
-		if propIsNotFree(ent) then return false end
+		/*if UAS.settings.frzen ~= 0 then
+			--if propIsNotFree(ent) then return false end
+		end*/
+		if ent.uantispam_frzn == true then return false end
 	end)
 	
 	hook.Add("EntUnfreeze","dgsgahrthh",function( ent, phys )
-		if UAS.settings.frzen == 0 then return end
-		if propIsNotFree(ent) then return false end
+		/*if UAS.settings.frzen ~= 0 then
+			--if propIsNotFree(ent) then return false end
+		end*/
+		if ent.uantispam_frzn == true then return false end
 	end)
 	
 	function PhysObj:EnableMotion(bool)
+		if not self:IsValid() then return end
 		local ent = self:GetEntity( )
 		
 		local canperformaction = true
@@ -231,14 +260,14 @@ if SERVER then
 			ent.uantispam_cg = nil
 	
 			local phys = ent:GetPhysicsObject()
-			if phys:IsValid() then
+			if phys:IsValid() and ent.uantispam_mtn ~= nil then
 				phys:EnableMotion(ent.uantispam_mtn)
 			end
 			ent.uantispam_mtn = nil
 		end
 	end
 	
-	local function freeze(ent,phys)		
+	local function freeze(ent,phys)
 		ent:DrawShadow(false)
 		ent.uantispam_oc = ent.uantispam_oc or ent:GetColor()
 		ent:SetColor(Color(100,160,255,60))
@@ -280,16 +309,16 @@ if SERVER then
 					phys:EnableMotion(false)
 				end
 			else
-				e.uantispam_mtn = false
+				e.uantispam_mtn = nil
 				unfreeze(e)
 			end
 		end
 	end)
 	
 	local function spawned(v,m,mul,e)
-		if v.st == 0 then v.st = CurTime() end
+		if v.st == 0 then v.st = RealTime() end
 		local ls = v.ls
-		local st = CurTime()
+		local st = RealTime()
 		v.ls = st
 		v.spn = v.spn + 1
 		if spawnh[v][m] ~= nil then
@@ -322,9 +351,9 @@ if SERVER then
 		local dt = t-lt
 		
 		for k,v in pairs(player.GetAll()) do
-			if v.ls ~= nil and v.ls + 0.6 < t then
+			if v.ls ~= nil and (v.ls + UAS.settings.recharge_delay) < t then
 				if v.rep < 1 then
-					updaterep(v,-(dt*(v.rep+0.05))/3)
+					updaterep(v,-((dt*v.rep*UAS.settings.recharge_grade+UAS.settings.recharge_amount)/UAS.settings.recharge_length))
 				elseif spawnh[v] ~= {} then
 					updaterep(v,0)
 					spawnh[v] = {}
@@ -379,12 +408,22 @@ if SERVER then
 		end
 	end)
 	
-	local function spawnHub(ply,e,m,mul)
+	local function spawnHub(ply,e,m,mul,isdupe)
 		e:SetCollisionGroup(COLLISION_GROUP_WORLD)
-		hook.Call("postspawned",GAMEMODE,ply,e,m,mul)
+		hook.Call("postspawned",GAMEMODE,ply,e,m,mul,isdupe)
 	end
 	
-	local function spawnHub2(ply,e,m,mul)
+	function sendent(ply,ent,bit)
+		timer.Simple((ply:Ping( )/1000) + 0.1, function()
+			net.Start("uantispam_pinf")
+				net.WriteBit(bit)
+				net.WriteEntity( ent )
+			net.Send(ply)
+		end)
+	end
+	
+	local function spawnHub2(ply,e,m,mul,isdupe)
+		if not IsValid(e) then return end
 		local mr, spm, c = 0, 0, 0
 		local phys = e:GetPhysicsObject()
 		if phys:IsValid() and not phys:IsMoveable() then
@@ -405,30 +444,48 @@ if SERVER then
 		end
 		e:SetCollisionGroup(COLLISION_GROUP_NONE)
 		local spm = ((mr*0.5)+(spm*0.3)+(c*0.2))*0.6
+		
 		if (propIsNotFree(e) and UAS.settings.frzen == 1) or (UAS.settings.blockspawn == 0 and ply.rep < UAS.settings.minrep and not cananyway(ply) and UAS.settings.enabled == 1 ) then
-			if phys:IsValid() and phys:IsMoveable() then
+			if isdupe then
+				phys:EnableMotion(false)
+			elseif phys:IsValid() and phys:IsMoveable() then
 				freeze(e,phys)
 			end
 		end
 		if spm > UAS.settings.delrep then
-			net.Start("uantispam_pinf")
-				net.WriteBit(true)
-				net.WriteEntity( e)
-			net.Send(ply)
+			sendent(ply,e,true)
 		elseif spm > UAS.settings.frzrep then
-			net.Start("uantispam_pinf")
-				net.WriteBit(false)
-				net.WriteEntity( e )
-			net.Send(ply)
+
+			sendent(ply,e,false)
 		end
 		entis[e] = {["ent"] = e, ["mr"] = mr,["spm"] = spm, ["spwnr"] = ply}
 	end
 	
-	hook.Add("postspawned","afafgsgshr",function(ply,e,m,mul)
-		timer.Simple(0.001,function() spawnHub2(ply,e,m,mul) end)
+	hook.Add("postspawned","afafgsgshr",function(ply,e,m,mul,isdupe)
+		timer.Simple(0.001,function() spawnHub2(ply,e,m,mul,isdupe) end)
 	end)
 	
-	hook.Add("PlayerSpawnedEffect","spwnd",function(ply,mdl,ent)
+	if cleanup then
+		UAS.oldcleanup = UAS.oldcleanup or cleanup.Add
+		function cleanup.Add(ply, Type, ent)
+			if not IsValid(ply) or not IsValid(ent) then return UAS.oldcleanup(ply, Type, ent) end
+			
+			if Type ~= "constraints" then
+				local mult = 1
+				if Type == "props" or Type == "duplicates" or Type == "stacks" or Type == "AdvDupe2" then mult = UAS.settings.mul_prop
+				elseif Type == "ragdolls" then mult = UAS.settings.mul_ragd
+				elseif Type == "sents" then mult = UAS.settings.mul_sent
+				elseif Type == "vehicles" then mult = UAS.settings.mul_veh
+				elseif Type == "effects" then mult = UAS.settings.mul_effect end
+				
+				spawnHub(ply,ent,ent:GetModel(),mult, (Type == "duplicates" or Type == "AdvDupe2"))
+			end
+			
+			return UAS.oldcleanup(ply, Type, ent)
+		end
+	end
+	
+	/*hook.Add("PlayerSpawnedEffect","spwnd",function(ply,mdl,ent)
 		spawnHub(ply,ent,mdl,UAS.settings.mul_effect)
 	end)
 	hook.Add("PlayerSpawnedProp","spwnd",function(ply,mdl,ent)
@@ -437,9 +494,12 @@ if SERVER then
 	hook.Add("PlayerSpawnedRagdoll","spwnd",function(ply,mdl,ent)
 		spawnHub(ply,ent,mdl,UAS.settings.mul_ragd)
 	end)
+	hook.Add("PlayerSpawnedSENT","spwnd",function(ply,ent)
+		spawnHub(ply,ent,"",UAS.settings.mul_sent)
+	end)
 	hook.Add("PlayerSpawnedVehicle","spwnd",function(ply,ent)
 		spawnHub(ply,ent,"",UAS.settings.mul_veh)
-	end)
+	end)*/
 end
 
 if CLIENT then
@@ -484,7 +544,6 @@ if CLIENT then
 	net.Receive("uantispam_valueexchange", function()
 		local opt = net.ReadString()
 		local val = net.ReadFloat()
-		if not UAS.settings[opt] or not val then return end
 		UAS.settings[opt] = val
 	end)
 	

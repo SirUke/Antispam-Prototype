@@ -76,10 +76,10 @@ UAS.skin = {
 	rmat = Material("vgui/gradient-r"),
 	dmat = Material("gui/gradient_down"),
 	
-	addhdr = function(parent,name,desc)
+	addhdr = function(parent,name,open,desc)
 		local wide = parent:GetWide()
 		local pnl = subpanel(parent,wide, 30)
-		pnl.exp = false
+		pnl.exp = open == true and true or false
 		
 		pnl.IconLayout = vgui.Create("DIconLayout", pnl)
 		local x = pnl.IconLayout
@@ -197,8 +197,8 @@ UAS.skin = {
 		sldr.TextArea:SetPos(wide-78,4)
 		sldr.TextArea:Dock( NODOCK )
 		
-		local dmc = (max-min)*(dcmls*4)
-		dmc = math.floor(dmc / math.Max(dmc/10,1))
+		--local dmc = (max-min)*(dcmls*4)
+		local dmc = math.Min(math.ceil(max/min)*dcmls,20)--math.floor(dmc / math.Max(dmc/10,1))
 		sldr.Slider:Dock( BOTTOM )
 		sldr.Slider:SetNotches( dmc )
 		sldr.Slider.TranslateValues = function( slider, x, y ) return sldr:TranslateSliderValues( x, y ) end
@@ -299,11 +299,11 @@ UAS.skin = {
 		pnl.xname = "x"
 		pnl.yname = "y"
 		
-		pnl.lxz = 1
-		pnl.lyz = 1
-		function pnl:SetZoomX(n) self.xzoom = n end
-		function pnl:SetZoomY(n) self.yzoom = n end
-		function pnl:SetZoomXY(n,m) self.xzoom = n; self.yzoom = m end
+		local lxz = false
+		local lyz = false
+		function pnl:SetZoomX(n) self.xzoom = n; lxz = true; lyz = false end
+		function pnl:SetZoomY(n) self.yzoom = n; lxz = false; lyz = true end
+		function pnl:SetZoomXY(n,m) self.xzoom = n; self.yzoom = m; lxz = true; lyz = true end
 		function pnl:GetZoomX() return self.xzoom end
 		function pnl:GetZoomY() return self.yzoom end
 		function pnl:GetZoomXY() return self.xzoom, self.yzoom end
@@ -394,9 +394,13 @@ UAS.skin = {
 			return x, y+off
 		end
 		
+		local function sgn(x)
+			return x > 0 and 1 or 0
+		end
+		
 		function pnl:OnMouseWheeled(d)
-			--pnl.xzoom = math.Clamp(pnl.xzoom + d*0.04*pnl.xzoom,0.05,10)
-			--pnl.yzoom = math.Clamp(pnl.yzoom + d*0.04*pnl.yzoom,0.05,10)
+			self.xzoom  = math.Clamp(self.xzoom + d*0.05*(self.xzoom+1),0.1,20)
+			self.yzoom = math.Clamp(self.yzoom + d*0.05*(self.yzoom+1),0.1,20)
 		end
 		
 		function pnl:PreGridPaint(w,h) end
@@ -418,12 +422,12 @@ UAS.skin = {
 			surface.DrawText("0")
 			
 			surface.DisableClipping(true)
-			local txt = self.xname .. " = " .. math.floor(self.mx/self.xzoom*100)/100
+			local txt = self.xname .. " = " .. math.floor(self.mx/self.xzoom*1000)/1000
 			local sx, _ = surface.GetTextSize(txt)
 			surface.SetTextPos(w+2,y-6)
 			surface.DrawText(txt)
 			
-			local txt = self.yname .. " = " .. math.floor(self.my/self.yzoom*100)/100
+			local txt = self.yname .. " = " .. math.floor(self.my/self.yzoom*1000)/1000
 			local sx,sy = surface.GetTextSize(txt)
 			surface.SetTextPos(x+6,2-sy)
 			surface.DrawText(txt)
@@ -440,36 +444,39 @@ UAS.skin = {
 		
 		function pnl:GridPaint(w,h)
 			local w2,h2 = w - self.xin,h - self.yin
-			local xs = math.ceil((self.xsca/self.xzoom) / self.grid)
-			local mx = self.mx/self.xsca*pnl.grid
-			local stx = math.Max(math.Round(1/ pnl.xzoom),1)
-			for i = 1, xs, stx do
-				local n = tostring(math.floor(i * mx * 100) / 100)
-				self:DrawVerticalLine((i-stx*0.5)*mx,0,30)
-				local x, y = self:DrawVerticalLine(i*mx,5,200)
+			local scx, scy = (sx-pnl.xin), (sy-pnl.yin)
+
+			local xz = math.pow(10, math.ceil(math.log(self.xzoom*1.8)/math.log(10))-1) --http://facepunch.com/showthread.php?t=1427411&p=46095950&viewfull=1#post46095950
+			local xs = math.ceil((((self.xsca+1)/self.xzoom) / self.grid)*xz)
+			local mx = ((self.mx/self.xsca)*self.grid)/xz
+			for i = 1, math.Min(xs,300) do
+				local n = tostring(math.floor(i * mx * 1000) / 1000)
+				self:DrawVerticalLine((i-0.5)*mx,0,30)
+				local x, y = self:DrawVerticalLine(i*mx,5,130)
 				local sx,sy = surface.GetTextSize(n)
 				surface.SetTextPos(x-sx/2,y+2)
 				surface.DrawText(n)
 			end
 			
-			local ys = math.ceil((self.ysca/self.yzoom) / self.grid)
-			local my = self.my/self.ysca*pnl.grid
-			local sty = math.Max(math.Round(1/ pnl.yzoom),1)
-			for i = 1, ys, sty do
-				local n = tostring(math.floor(i * my * 100) / 100)
-				self:DrawHorizontalLine((i-sty*0.5)*my,0,30)
-				local x,y = self:DrawHorizontalLine(i*my,5,200)
+			local yz = math.pow(10, math.ceil(math.log(self.yzoom*1.8)/math.log(10))-1)
+			local ys = math.ceil((((self.ysca+1)/self.yzoom) / self.grid)*yz)
+			local my = ((self.my/self.ysca)*pnl.grid)/yz
+			for i = 1, math.Min(ys,300) do
+				local n = tostring(math.floor(i * my * 1000) / 1000)
+				self:DrawHorizontalLine((i-0.5)*my,0,30)
+				local x,y = self:DrawHorizontalLine(i*my,5,130)
 				local sx,sy = surface.GetTextSize(n)
 				surface.SetTextPos(x-sx-2,y-sy/4)
 				surface.DrawText(n)
 			end
 		end
 		
-		/*pnl.But = vgui.Create("DImageButton",pnl)
+		pnl.But = vgui.Create("DImageButton",pnl)
 		pnl.But:SetImage("icon16/wand.png")
 		pnl.But:SetSize(16,16)
 		pnl.But:SetPos(2,sy-18)
 		pnl.But.xy = -1
+		pnl.But.ls = 0
 		function pnl.But:Think()
 			if self.Depressed then
 				if pnl.But.xy ~= 2 then pnl.But.xy = 2; self:SetColor(Color(0,255,255,100)) end
@@ -480,26 +487,25 @@ UAS.skin = {
 			end
 		end
 		pnl.But.DoClick = function()
-			local scx, scy = (sx-pnl.xin)* pnl.mx/pnl.xzoom, (sy-pnl.yin)* pnl.my/pnl.yzoom
+			local scx, scy = (sy-pnl.yin)*pnl.xsca, (sx-pnl.xin)*pnl.ysca
 			
-			if scx > scy then
-				pnl.lastset = 1
-				pnl.oxz = pnl.xzoom
-				pnl.oyz = pnl.yzoom
-				pnl.xzoom = pnl.xzoom * (scy / scx)
-			elseif scx < scy then
-				pnl.lastset = 1
-				pnl.oxz = pnl.xzoom
-				pnl.oyz = pnl.yzoom
-				pnl.yzoom = pnl.yzoom * (scx / scy)
-			elseif pnl.lastset == 1 then
-				pnl.lastset = 0
+			if pnl.But.ls ~= 0 then
+				pnl.But.ls = 0
 				pnl.xzoom = pnl.oxz or pnl.xzoom
 				pnl.yzoom = pnl.oyz or pnl.yzoom
+			elseif lxz or (lxz == lyz and scx<scy) then
+				pnl.But.ls = 1
+				pnl.oxz = pnl.xzoom
+				pnl.oyz = pnl.yzoom
+				pnl.yzoom = pnl.xzoom / (scx/scy)
+			elseif lyz or (lxz == lyz and scx>scy) then
+				pnl.But.ls = 2
+				pnl.oxz = pnl.xzoom
+				pnl.oyz = pnl.yzoom
+				pnl.xzoom = pnl.yzoom / (scy/scx)
 			end
 		end
-		--pnl.But:DoClick()
-		*/
+		pnl.But:DoClick()
 		return pnl
 	end
 }
